@@ -1,247 +1,224 @@
 //============================================================================
 // Name        : DataSaver.cpp
 // Author      : Zassa Kavuma
-// Version     : 0.1
+// Version     : 0.2
 // Copyright   : Released under the GNU General Public License
-// Description : Program for saving neural network training data
+// Description : Program for saving joint position data
 //============================================================================
 
-//struct fann_train_data *train_data, *test_data;
-//fann_destroy_train(train_data);
-//fann_destroy_train(test_data);
-
+// Includes
 #include <iostream>
 #include <fstream>
-#include <GL/glut.h>
+#include <cmath>
+#include <algorithm>
+#include <stdio.h>
 #include <ni/XnCppWrapper.h>
+#include <fftw3.h>
+#include <sstream>
+#include <cstdio>
+#include <ctime>
 
-using namespace xn;
-using namespace std;
-
-#define window_width  640
-#define window_height 480
-#define PAIRS 1000 // Sets the number of data pairs to record
+// Defines
+#define FILES 	60
+#define PAIRS 	32 // Sets the number of data pairs to record
+#define PAIRSOUT ((PAIRS/2)+1) // Set the number of DFT output pairs
+#define VALUES 	12
+#define DAT 	1
+#define POSE_TO_USE "Psi"
 #define CHECK_RC( nRetVal, issue )                                          \
     if( nRetVal != XN_STATUS_OK )                                           \
     {                                                                       \
         printf( "%s failed: %s\n", issue, xnGetStatusString( nRetVal ) );   \
         return nRetVal;                                                     \
     }
-#define POSE_TO_USE "Psi"
+
+// Globals
 xn::UserGenerator g_UserGenerator;
+using namespace xn;
+using namespace std;
+
+// Callbacks
 
 void XN_CALLBACK_TYPE
-User_NewUser(xn::UserGenerator& generator, XnUserID nId, void* pCookie)
-{
+User_NewUser(xn::UserGenerator& generator, XnUserID nId, void* pCookie){
 	printf("New User: %d\n", nId);
 	g_UserGenerator.GetPoseDetectionCap().StartPoseDetection(POSE_TO_USE,
 	nId);
 }
-
 void XN_CALLBACK_TYPE
 User_LostUser(xn::UserGenerator& generator, XnUserID nId, void* pCookie)
 {}
-
 void XN_CALLBACK_TYPE
-Pose_Detected(xn::PoseDetectionCapability& pose, const XnChar* strPose, XnUserID nId, void* pCookie)
-{
+Pose_Detected(xn::PoseDetectionCapability& pose, const XnChar* strPose, XnUserID nId, void* pCookie){
 	printf("Pose %s for user %d\n", strPose, nId);
 	g_UserGenerator.GetPoseDetectionCap().StopPoseDetection(nId);
 	g_UserGenerator.GetSkeletonCap().RequestCalibration(nId, TRUE);
 }
-
 void XN_CALLBACK_TYPE
-Calibration_Start(xn::SkeletonCapability& capability, XnUserID nId, void* pCookie)
-{
+Calibration_Start(xn::SkeletonCapability& capability, XnUserID nId, void* pCookie){
 	printf("Starting calibration for user %d\n", nId);
 }
-
 void XN_CALLBACK_TYPE
-Calibration_End(xn::SkeletonCapability& capability, XnUserID nId, XnBool bSuccess, void* pCookie)
-{
-	if (bSuccess)
-	{
+Calibration_End(xn::SkeletonCapability& capability, XnUserID nId, XnBool bSuccess, void* pCookie){
+	if (bSuccess){
 		printf("User calibrated\n");
 		g_UserGenerator.GetSkeletonCap().StartTracking(nId);
 	}
-	else
-	{
+	else{
 		printf("Failed to calibrate user %d\n", nId);
 		g_UserGenerator.GetPoseDetectionCap().StartPoseDetection(POSE_TO_USE, nId);
 	}
 }
-
-// Glut Main loop
-void main_loop_function() // passed to glutIdle
-{
-	// Clear color (screen)
-	// And depth (used internally to block obstructed objects)
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	// Load identity matrix
-	glLoadIdentity();
-	// Multiply in translation matrix
-	glTranslatef(0,0, -10);
-	// Render colored quad
-	glBegin(GL_QUADS);
-	glColor3ub(255, 255, 000); glVertex2f(-0.5,  0.5);
-	glColor3ub(255, 255, 000); glVertex2f( 1,  1);
-	glColor3ub(255, 255, 000); glVertex2f( 0.5, -0.5);
-	glColor3ub(255, 255, 000); glVertex2f(-1, -1);
-	glEnd();
-	// Swap buffers (color buffers, makes previous render visible)
-	glutSwapBuffers();
-}
-
-// Initialze OpenGL perspective matrix
-void GL_Setup(int width, int height)
-{
-	glViewport( 0, 0, width, height );
-	glMatrixMode( GL_PROJECTION );
-	glEnable( GL_DEPTH_TEST );
-	gluPerspective( 45, (float)width/height, .1, 100 );
-	glMatrixMode( GL_MODELVIEW );
-}
-
-
-int main(int argc, char** argv) // argument count, argument vector
+int main(int argc, char** argv)
 {
 	// Declarations
-	int paircount = 0;
-	int delaycount = 0;
-	int arrayloaddelay = 0; // delays writing to file until first delta values are calculated
-
-	float positfx = 0;
-	float posit0x = 0;
-	float posit1x = 0;
-	float posit2x = 0;
-	float delta1x = 0;
-	float delta2x = 0;
-	float deltafx = 0;
-
-	printf("Welcome Trainer!\n");
-
-	// Initialize data file
-	ofstream myfile;
-	myfile.open ("../Shared/handtrain1.data");
-	myfile << PAIRS <<" 2 1" << "\n";
-	myfile.close();
-
-	XnStatus nRetVal = XN_STATUS_OK; // set return value for error checking
+	XnStatus nRetVal = XN_STATUS_OK;
 	xn::Context context;
 	nRetVal = context.Init();
 	CHECK_RC( nRetVal, "Init" );
-
 	// Create the user generator
 	nRetVal = g_UserGenerator.Create(context);
 	CHECK_RC( nRetVal, "Create" );
 	XnCallbackHandle h1, h2, h3;
 	g_UserGenerator.RegisterUserCallbacks(User_NewUser, User_LostUser, NULL, h1);
-	g_UserGenerator.GetPoseDetectionCap().RegisterToPoseCallbacks( Pose_Detected, NULL, NULL, h2);
-
-	// g_userGenerator.GetPoseDetectionCap().RegisterToOutOfPose(PoseLost, GetParentDevice(), m_hPoseLost);
-
+	g_UserGenerator.GetPoseDetectionCap().RegisterToPoseCallbacks( Pose_Detected, NULL, NULL, h2); // undeprecate?
 	g_UserGenerator.GetSkeletonCap().RegisterCalibrationCallbacks( Calibration_Start, Calibration_End, NULL, h3);
-
-	//g_UserGenerator.GetSkeletonCap().RegisterToCalibrationStart(UserCalibration_CalibrationStart, NULL, hCalibrationStart);
-
 	// Set the profile
 	g_UserGenerator.GetSkeletonCap().SetSkeletonProfile(XN_SKEL_PROFILE_ALL);
 	// Start generating
 	nRetVal = context.StartGeneratingAll();
 	CHECK_RC( nRetVal, "StartGeneratingAll" );
 
-	// Initialize GLUT and start main loop
-	//glutInit(&argc, argv);
-	//glutInitWindowSize(window_width, window_height);
-	//glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
-	//glutCreateWindow("Badman Display!");
-	//glutIdleFunc(main_loop_function);
-	//GL_Setup(window_width, window_height);
+	XnSkeletonJointPosition leftHand;
+	XnSkeletonJointPosition leftShoulder;
+	XnSkeletonJointPosition rightHand;
+	XnSkeletonJointPosition rightShoulder;
 
-	while (TRUE)
+	stringstream 	ss;
+	string 			track;
+	ifstream 		inFile;
+
+	// Check for previous files and create new file
+	for (int x = 0; x < FILES; ++x) // for each raw data file
 	{
-		// Update to next frame
-		nRetVal = context.WaitAndUpdateAll();
-		CHECK_RC( nRetVal, "WaitAndUpdateAll" );
+		ss << x;
+		track = ss.str();
+		string basename;
 
-		// Extract user positions of each tracked user
-		XnUserID aUsers[15];
-		XnUInt16 nUsers = 15;
-		g_UserGenerator.GetUsers(aUsers, nUsers);
-		for (int i = 0; i < nUsers; ++i)
+		if (DAT==1){
+			basename = "../Shared/RAW/RAW000001dualwaveX.dat";
+			basename.replace(27, 1, track);
+		}
+		if (DAT==2){
+			basename = "../Shared/RAW/RAW000010dualrowX.dat";
+			basename.replace(26, 1, track);
+		}
+		if (DAT==3){
+			basename = "../Shared/RAW/RAW000100dualriseX.dat";
+			basename.replace(27, 1, track);
+		}
+		if (DAT==4){
+			basename = "../Shared/RAW/RAW001000timeX.dat"; //hmm
+			basename.replace(23, 1, track);
+		}
+		if (DAT==5){
+			basename = "../Shared/RAW/RAW010000clapX.dat";
+			basename.replace(23, 1, track);
+		}
+		if (DAT==6){
+			basename = "../Shared/RAW/RAW100000crossX.dat"; //hmm
+			basename.replace(24, 1, track);
+		}
+
+		cout << basename << endl;
+		ss.str("");
+
+		ifstream fp(basename.c_str());
+		if (fp==NULL) // if file does not exist
 		{
-			if (g_UserGenerator.GetSkeletonCap().IsTracking(aUsers[i])) // if user is being tracked
+			// Open data file for appending
+			ofstream myfile1;
+			myfile1.open (basename.c_str(),ios::app);
+
+			int paircount = 0;
+			int memwrite = 0;
+			int mw;
+			float positbuffer[PAIRS][VALUES]; // Buffer used to have only one write to disk event
+			
+			printf("Welcome Trainer!\n");
+			while (TRUE)
 			{
-				//XnSkeletonJointPosition Head;
-				//g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(aUsers[i], XN_SKEL_HEAD, Head);
+				// Update to next frame
+				nRetVal = context.WaitAndUpdateAll();
+				CHECK_RC( nRetVal, "WaitAndUpdateAll" );
 
-				XnSkeletonJointPosition leftHand;
-				g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(aUsers[i], XN_SKEL_LEFT_HAND, leftHand);
-				printf("%d: (%f,%f,%f) [%f]\n", aUsers[i],	leftHand.position.X, leftHand.position.Y, leftHand.position.Z,	leftHand.fConfidence);
+				// Set number of users
+				XnUserID aUsers[15]; //users
+				XnUInt16 nUsers = 15; //users count
+				g_UserGenerator.GetUsers(aUsers, nUsers);
 
-				if (paircount<PAIRS) // take a set amount of readings
+				for (int i = 0; i < 1; ++i) // For defined users (2)
 				{
-					if (delaycount==5) // delay between readings
+					if (g_UserGenerator.GetSkeletonCap().IsTracking(aUsers[i])) // If user is being tracked
 					{
-						if (arrayloaddelay>5) // compute data and write to file when array* full
+						g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(aUsers[i], XN_SKEL_LEFT_HAND, leftHand);
+						g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(aUsers[i], XN_SKEL_LEFT_SHOULDER, leftShoulder);
+						g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(aUsers[i], XN_SKEL_RIGHT_HAND, rightHand);
+						g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(aUsers[i], XN_SKEL_RIGHT_SHOULDER, rightShoulder);
+
+						clock_t start;
+						double diff = 50000;
+
+						if (paircount<PAIRS) // Take a number of readings set by PAIRS
 						{
-							// open data file for appending
-							myfile.open ("../Shared/handtrain1.data",ios::app);
+							if (clock()>=start+diff)
+							{
+								// Record positions
+								positbuffer[memwrite][0] = leftHand.position.X + 1024;
+								positbuffer[memwrite][1] = leftHand.position.Y + 1024;
+								positbuffer[memwrite][2] = leftHand.position.Z + 1024;
+								positbuffer[memwrite][3] = rightHand.position.X + 1024;
+								positbuffer[memwrite][4] = rightHand.position.Y + 1024;
+								positbuffer[memwrite][5] = rightHand.position.Z + 1024;
+								positbuffer[memwrite][6] = leftShoulder.position.X + 1024;
+								positbuffer[memwrite][7] = leftShoulder.position.Y + 1024;
+								positbuffer[memwrite][8] = leftShoulder.position.Z + 1024;
+								positbuffer[memwrite][9] = rightShoulder.position.X + 1024;
+								positbuffer[memwrite][10] = rightShoulder.position.Y + 1024;
+								positbuffer[memwrite][11] = rightShoulder.position.Z + 1024;
 
-							// compute new data, this works for equal time spacing
-							positfx = leftHand.position.X + 1024;
-							deltafx = positfx - posit0x;
-							delta1x = posit0x - posit1x;
-							delta2x = posit0x - posit2x;
-
-							// write data to file
-							myfile << delta2x << " " << delta1x << "\n" << deltafx <<"\n";
-
-							// close data file
-							myfile.close();
-
-							// prepare data for next iteration
-							posit2x = posit1x;
-							posit1x = posit0x;
-							posit0x = positfx;
-
-							delaycount=0;
-							paircount++;
+								// Write to file when buffer full
+								if (memwrite==(PAIRS-1)) // When recording complete
+								{
+									// Write positions to buffer file
+									for (mw=0; mw<PAIRS; mw++)
+										myfile1 << positbuffer[mw][0] << "\t" << positbuffer[mw][1] << "\t" << positbuffer[mw][2] << "\t" << positbuffer[mw][3] << "\t"
+												<< positbuffer[mw][4] << "\t" << positbuffer[mw][5] << "\t" << positbuffer[mw][6] << "\t" << positbuffer[mw][7] << "\t"
+												<< positbuffer[mw][8] << "\t" << positbuffer[mw][9] << "\t" << positbuffer[mw][10] << "\t" << positbuffer[mw][11] << endl;
+									// Close data file
+									myfile1.close();
+									memwrite=0;
+								}
+								else
+								{
+									memwrite++;
+								}
+								paircount++;
+								start = clock(); // reset clock start
+							}
 						}
-						else // compute data only
+						else
 						{
-							// compute new data, this works for equal time spacing
-							positfx = leftHand.position.X + 1024;
-							deltafx = positfx - posit0x;
-							delta1x = posit0x - posit1x;
-							delta2x = posit0x - posit2x;
-
-							// prepare data for next iteration
-							posit2x = posit1x;
-							posit1x = posit0x;
-							posit0x = positfx;
-
-							delaycount=0;
-							arrayloaddelay++;
+						context.Release();
+						cout<< "Thanks for the data, Trainer!" <<endl;
+						return 0;
 						}
 					}
-					else
-					{
-						delaycount++;
-					}
-				}
-				else
-				{
-					context.Release();
-					cout<< "Thanks for the data, Trainer. Goodbye!" <<endl;
-					return 0;
 				}
 			}
+			return 0;
 		}
 	}
-
-	//glutMainLoop();
-
 	// Clean up
 	context.Release();
 	cout<< "Goodbye" <<endl;
