@@ -2,7 +2,7 @@
 // Name        : NetworkUser.cpp
 // Author      : Zassa Kavuma
 // Version     : 0.1
-// Copyright   : Open Source
+// Copyright   : Released under the GNU General Public License
 // Description : Program for evaluating neural network performance
 //============================================================================
 

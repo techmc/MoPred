@@ -6,10 +6,6 @@
 // Description : Program for saving neural network training data
 //============================================================================
 
-// TODO: Save x,y and z data
-// TODO: Use a buffer to cut down on disk access events.
-// TODO: Save multiple recordings
-
 //struct fann_train_data *train_data, *test_data;
 //fann_destroy_train(train_data);
 //fann_destroy_train(test_data);
