@@ -1,0 +1,101 @@
+//============================================================================
+// Name        : NetworkTrainer.cpp
+// Author      : Zassa Kavuma
+// Version     : 0.1
+// Copyright   : Open Source
+// Description : Program for training neural networks
+//============================================================================
+
+#include <iostream>
+#include <fstream>
+#include <stdio.h>
+#include <fann.h>
+
+//using namespace std;
+
+int FANN_API test_callback(struct fann *ann, struct fann_train_data *train, // Can't change atm
+	unsigned int max_epochs, unsigned int epochs_between_reports,
+	float desired_error, unsigned int epochs)
+{
+	printf("Hi Epochs     %8d. MSE: %.5f. Desired-MSE: %.5f\n", 
+	       epochs, fann_get_MSE(ann), desired_error);
+	return 0;
+}
+
+
+
+int main()
+{
+	const unsigned int num_input = 4; // Number of input neurons
+	const unsigned int num_output = 1; // Number of output neurons
+	const unsigned int num_layers = 3; // Number of layers
+	const unsigned int num_neurons_hidden = 4; // Number of neurons in the hidden layer
+	const float desired_error = (const float) 0;
+	const unsigned int max_epochs = 10000;
+	const unsigned int epochs_between_reports = 10;
+	struct fann *ann;
+	struct fann_train_data *data;
+
+	unsigned int decimal_point;
+
+	// Create data file
+	//ofstream myfile;
+	//myfile.open ("../Shared/plot.data");
+	//myfile << "#Epochs	MSE\n";
+	//myfile.close();
+
+	// Create neural network
+	printf("Creating network.\n");
+	ann = fann_create_standard(num_layers, num_input, num_neurons_hidden, num_output);
+	// Import training data
+	data = fann_read_train_from_file("../Shared/lhandtorso3.data");
+	// Set activation steepness
+	fann_set_activation_steepness_hidden(ann, 1);
+	fann_set_activation_steepness_output(ann, 1);
+	// Set activation function linear/threshold/sigmoid/gaussian etc.
+	fann_set_activation_function_hidden(ann, FANN_SIGMOID_SYMMETRIC);
+	fann_set_activation_function_output(ann, FANN_SIGMOID_SYMMETRIC);
+
+	fann_set_train_stop_function(ann, FANN_STOPFUNC_BIT);
+	fann_set_bit_fail_limit(ann, 0.01f);
+	// Set initial weights
+	fann_init_weights(ann, data);
+
+	// Set Scaling Parameters
+	printf("Scaling Data.\n");
+	fann_set_input_scaling_params(
+				   	ann,
+				   	data,
+				   	-1,
+				   	1);
+	fann_set_output_scaling_params(
+				   	ann,
+				   	data,
+				   	-1,
+				   	1);
+
+	// Scale training data
+	fann_scale_train( ann, data );
+	// TODO: Scale the Validation Data
+
+	// Run training function, way have to put in a loop for validation
+	printf("Training network.\n");
+	fann_train_on_data(ann, data, max_epochs, epochs_between_reports, desired_error);
+
+	// Save float net and scaled data
+	printf("Saving network.\n");
+	fann_save(ann, "../Shared/lhandtorso3_float.net");
+	//fann_save_train(data, "../Shared/lhandtorso_scaled.data"); // yeah?
+
+	// Save fixed point (integer) net and data, remove?
+	decimal_point = fann_save_to_fixed(ann, "../Shared/lhandtorso_fixed.net");
+	fann_save_train_to_fixed(data, "../Shared/lhandtorso_fixed.data", decimal_point);
+
+	// Save error data for Gnuplot
+
+	printf("Cleaning up.\n");
+	fann_destroy_train(data);
+	fann_destroy(ann);
+
+	return 0;
+}

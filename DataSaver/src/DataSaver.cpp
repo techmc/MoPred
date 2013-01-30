@@ -3,7 +3,7 @@
 // Author      : Zassa Kavuma
 // Version     : 0.2
 // Copyright   : Released under the GNU General Public License
-// Description : Program for saving joint position data
+// Description : Program for saving raw data
 //============================================================================
 
 // Includes
